@@ -441,6 +441,86 @@ async def score_audit(interaction: discord.Interaction, vote_id: str, applicant:
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
+@bot.tree.command(name="score_template", description="Get an easy copy/paste scoring template for all candidates")
+@app_commands.describe(vote_id="Vote ID")
+async def score_template(interaction: discord.Interaction, vote_id: str):
+    if not is_lead(interaction.user):
+        await interaction.response.send_message("Only leads can get scoring templates.", ephemeral=True)
+        return
+
+    vote = get_vote(vote_id)
+    if not vote:
+        await interaction.response.send_message("Vote ID not found.", ephemeral=True)
+        return
+
+    if not vote["applicants"]:
+        await interaction.response.send_message("No candidates added yet.", ephemeral=True)
+        return
+
+    lines = []
+    for candidate in vote["applicants"]:
+        if candidate.get("discord_user_id") == interaction.user.id:
+            lines.append(f"# SKIP SELF: {candidate['name']}")
+        else:
+            lines.append(f"{candidate['name']} | 0 | 0 | 0 | notes optional")
+
+    template = "
+".join(lines)
+
+    message = (
+        "Copy this, replace the 0s with scores, then paste it into `/bulk_score`.
+
+"
+        "Format: `Toon | Role /15 | Upgrade /15 | Conduct /10 | Notes`
+
+"
+        f"```txt
+{template}
+```"
+    )
+
+    await interaction.response.send_message(message[:1900], ephemeral=True)
+
+
+@bot.tree.command(name="vote_summary", description="Show simple vote setup and progress")
+@app_commands.describe(vote_id="Vote ID")
+async def vote_summary(interaction: discord.Interaction, vote_id: str):
+    if not is_lead(interaction.user):
+        await interaction.response.send_message("Only leads can view vote summaries.", ephemeral=True)
+        return
+
+    vote = get_vote(vote_id)
+    if not vote:
+        await interaction.response.send_message("Vote ID not found.", ephemeral=True)
+        return
+
+    lines = []
+    for candidate in vote["applicants"]:
+        score_count = len(candidate.get("scores", {}))
+        lines.append(
+            f"**{candidate['name']}** — {candidate['class_name']} {candidate['applicant_type']}
+"
+            f"Needs: {candidate['needs']} | Objective: {candidate['objective_score']} / 60 | Lead Scores: {score_count}"
+        )
+
+    embed = discord.Embed(
+        title=f"Vote Summary — {vote['title']}",
+        description="
+
+".join(lines) or "No candidates added yet.",
+        color=discord.Color.teal()
+    )
+    embed.add_field(
+        name="Easy Lead Workflow",
+        value="1. `/score_template`
+2. Fill in scores
+3. Paste into `/bulk_score`
+4. Check `/rankings`",
+        inline=False
+    )
+    await interaction.response.send_message(embed=embed)
+
+
 @bot.tree.command(name="bulk_score", description="Score multiple armor award candidates at once")
 @app_commands.describe(
     vote_id="Vote ID",
