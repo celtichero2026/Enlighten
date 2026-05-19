@@ -212,6 +212,99 @@ async def add_candidate(
     await interaction.response.send_message(embed=build_applicant_embed(vote_id, applicant_data))
 
 
+@bot.tree.command(name="bulk_add_candidates", description="Add multiple candidates to an armor award vote at once")
+@app_commands.describe(
+    vote_id="Vote ID",
+    candidates="One line per candidate: Toon | Class | Main/Alt | Needs | Lifetime EKP | Monthly EKP"
+)
+async def bulk_add_candidates(
+    interaction: discord.Interaction,
+    vote_id: str,
+    candidates: str
+):
+    if not is_lead(interaction.user):
+        await interaction.response.send_message("Only leads can add candidates.", ephemeral=True)
+        return
+
+    data = load_data()
+    vote = data["votes"].get(vote_id)
+    if not vote:
+        await interaction.response.send_message("Vote ID not found.", ephemeral=True)
+        return
+
+    existing_names = {candidate["name"].lower() for candidate in vote["applicants"]}
+    added = []
+    skipped = []
+
+    for raw_line in candidates.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        parts = [part.strip() for part in line.split("|")]
+
+        if len(parts) < 6:
+            skipped.append(f"`{line}` — wrong format")
+            continue
+
+        toon_name = parts[0]
+        class_name = parts[1]
+        applicant_type = parts[2]
+        needs = parts[3]
+
+        try:
+            lifetime_ekp = int(parts[4].replace(",", ""))
+            monthly_ekp = int(parts[5].replace(",", ""))
+        except ValueError:
+            skipped.append(f"`{toon_name}` — EKP must be numbers")
+            continue
+
+        if toon_name.lower() in existing_names:
+            skipped.append(f"`{toon_name}` — already added")
+            continue
+
+        lt_score, monthly_score, objective_score = calculate_objective_score(
+            lifetime_ekp,
+            vote["highest_lifetime_ekp"],
+            monthly_ekp,
+            vote["highest_monthly_ekp"]
+        )
+
+        applicant_data = {
+            "name": toon_name,
+            "class_name": class_name,
+            "applicant_type": applicant_type,
+            "needs": needs,
+            "lifetime_ekp": lifetime_ekp,
+            "monthly_ekp": monthly_ekp,
+            "lifetime_score": lt_score,
+            "monthly_score": monthly_score,
+            "objective_score": objective_score,
+            "discord_user_id": None,
+            "scores": {}
+        }
+
+        vote["applicants"].append(applicant_data)
+        existing_names.add(toon_name.lower())
+        added.append(f"`{toon_name}` — objective {objective_score} / 60")
+
+    save_data(data)
+
+    message = "**Bulk candidates added:**
+"
+    message += "
+".join(added) if added else "None"
+
+    if skipped:
+        message += "
+
+**Skipped:**
+" + "
+".join(skipped)
+
+    await interaction.response.send_message(message[:1900])
+
+
 @bot.tree.command(name="score", description="Score an armor award candidate")
 @app_commands.describe(
     vote_id="Vote ID",
@@ -346,6 +439,98 @@ async def score_audit(interaction: discord.Interaction, vote_id: str, applicant:
         color=discord.Color.blue()
     )
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@bot.tree.command(name="bulk_score", description="Score multiple armor award candidates at once")
+@app_commands.describe(
+    vote_id="Vote ID",
+    scores="One line per candidate: Toon | role /15 | upgrade /15 | conduct /10 | optional notes"
+)
+async def bulk_score(
+    interaction: discord.Interaction,
+    vote_id: str,
+    scores: str
+):
+    if not is_lead(interaction.user):
+        await interaction.response.send_message("Only leads can score candidates.", ephemeral=True)
+        return
+
+    data = load_data()
+    vote = data["votes"].get(vote_id)
+    if not vote:
+        await interaction.response.send_message("Vote ID not found.", ephemeral=True)
+        return
+
+    candidates_by_name = {
+        candidate["name"].lower(): candidate
+        for candidate in vote["applicants"]
+    }
+
+    submitted = []
+    skipped = []
+
+    for raw_line in scores.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        parts = [part.strip() for part in line.split("|")]
+
+        if len(parts) < 4:
+            skipped.append(f"`{line}` — wrong format")
+            continue
+
+        toon_name = parts[0]
+        notes = parts[4] if len(parts) >= 5 else ""
+
+        try:
+            role_value = int(parts[1])
+            upgrade_impact = int(parts[2])
+            conduct = int(parts[3])
+        except ValueError:
+            skipped.append(f"`{toon_name}` — scores must be numbers")
+            continue
+
+        if not (0 <= role_value <= 15 and 0 <= upgrade_impact <= 15 and 0 <= conduct <= 10):
+            skipped.append(f"`{toon_name}` — score out of range")
+            continue
+
+        target = candidates_by_name.get(toon_name.lower())
+        if not target:
+            skipped.append(f"`{toon_name}` — candidate not found")
+            continue
+
+        if target.get("discord_user_id") == interaction.user.id:
+            skipped.append(f"`{toon_name}` — cannot score yourself")
+            continue
+
+        total = role_value + upgrade_impact + conduct
+        target["scores"][str(interaction.user.id)] = {
+            "lead_name": interaction.user.display_name,
+            "role_value": role_value,
+            "upgrade_impact": upgrade_impact,
+            "conduct": conduct,
+            "total": total,
+            "notes": notes
+        }
+
+        submitted.append(f"`{toon_name}` — {total} / 40")
+
+    save_data(data)
+
+    message = "**Bulk scores submitted:**
+"
+    message += "
+".join(submitted) if submitted else "None"
+
+    if skipped:
+        message += "
+
+**Skipped:**
+" + "
+".join(skipped)
+
+    await interaction.response.send_message(message[:1900], ephemeral=True)
 
 
 if not TOKEN:
